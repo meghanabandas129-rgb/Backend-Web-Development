@@ -1,26 +1,42 @@
-'use strict';
-// middleware/rateLimiter.js
-//
-// YOUR TASK: replace this pass-through with a real rate limiter.
-//
-// Right now this middleware lets EVERY request through, so the login route can be
-// brute-forced without limit. Build a strict limiter with `express-rate-limit`
-// (already in package.json) that is exported as the middleware used by the three
-// auth routes in src/routes/auth.js.
-//
-// Requirements (checked by the tests):
-//   - windowMs: 15 minutes
-//   - max: 5 attempts per window per IP
-//   - after the limit, respond with 429 and a `Retry-After` header
-//   - standardHeaders: true, legacyHeaders: false
-//   - (recommended) skipSuccessfulRequests: true so only FAILED attempts count
-//
-// Also add a COMMENT explaining how a Redis-backed store (rate-limit-redis) would
-// replace the default in-memory store in a multi-instance deployment, and why the
-// in-memory store is not enough when several instances run behind a load balancer.
-//
-// Hint: express-rate-limit returns a middleware function — export it directly:
-//   const rateLimit = require('express-rate-limit');
-//   module.exports = rateLimit({ ...options });
 
-module.exports = (req, res, next) => next(); // TODO: replace this stub
+'use strict';
+
+const rateLimit = require('express-rate-limit');
+
+// Strict rate limiter for authentication routes.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,                  // 5 attempts per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+
+  // Return 429 and tell the client when it can retry.
+  handler: (req, res, next, options) => {
+    const resetTime = req.rateLimit?.resetTime;
+
+    const retryAfterSeconds = resetTime
+      ? Math.max(1, Math.ceil((resetTime.getTime() - Date.now()) / 1000))
+      : Math.ceil(options.windowMs / 1000);
+
+    res.setHeader('Retry-After', String(retryAfterSeconds));
+
+    res.status(429).json({
+      error: 'Too many requests, please try again later.'
+    });
+  }
+});
+
+/*
+ * Redis scaling:
+ * In a multi-instance deployment, the default MemoryStore keeps
+ * separate counters inside each Node.js process. Behind a load
+ * balancer, requests can reach different instances and bypass
+ * the intended shared limit.
+ *
+ * Using rate-limit-redis with RedisStore and a shared Redis
+ * connection allows all instances to use the same rate-limit
+ * counters, enforcing one consistent limit across the cluster.
+ */
+
+module.exports = authLimiter;
